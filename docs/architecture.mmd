@@ -1,0 +1,21 @@
+flowchart TB
+    CLI[CLI / python -m video_scout] --> BOOT[bootstrap.Runtime 集中组装]
+    BOOT --> UI[Textual TUI]
+    UI --> SCAN[ScanService 原子额度与页面调度]
+    UI --> DL[DownloadService 任务生命周期]
+    UI --> EXPORT[export TXT/CSV/JSON]
+    SCAN --> PORTS[domain.ports 契约]
+    DL --> PORTS
+    EXPORT --> MODELS[domain.models + urls]
+    PORTS --> MODELS
+    HTTP[HTTPX / Beautiful Soup] -. 实现 .-> PORTS
+    MEDIA[yt-dlp JSON 子进程 + 有界媒体探测] -. 实现 .-> PORTS
+    SQL[SQLite 独立执行器] -. 实现 .-> PORTS
+    BROWSER[可选 Playwright] -. 实现 .-> PORTS
+    BOOT -. 注入 .-> HTTP
+    BOOT -. 注入 .-> MEDIA
+    BOOT -. 注入 .-> SQL
+    BOOT -. 启用时创建 .-> BROWSER
+    MEDIA --> FFMPEG[系统 FFmpeg 同一进程组]
+    SCAN -- Event / post_message --> UI
+    DL -- Event / post_message --> UI

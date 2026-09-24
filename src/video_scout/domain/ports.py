@@ -1,0 +1,56 @@
+"""Adapters must be cancellation-safe; blocking SDK work belongs outside the event loop."""
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from pathlib import Path
+from typing import Protocol
+
+from video_scout.domain.models import (
+    DownloadTask,
+    FetchedPage,
+    PageTask,
+    ProgressSink,
+    ScanConfig,
+    VideoCandidate,
+    VideoItem,
+)
+
+
+class PageFetcher(Protocol):
+    async def fetch(self, task: PageTask, config: ScanConfig) -> FetchedPage: ...
+    async def close(self) -> None: ...
+
+
+class PageLinkDiscoverer(Protocol):
+    def discover(self, page: FetchedPage, task: PageTask, config: ScanConfig) -> list[PageTask]: ...
+
+
+class VideoExtractor(Protocol):
+    def extract(self, page: FetchedPage, config: ScanConfig) -> list[VideoCandidate]: ...
+
+
+class VideoResolver(Protocol):
+    # Pull one confirmed item at a time; never eagerly materialize playlists. budget is
+    # the remaining UNIQUE quota, a hint (only the caller knows global duplicates).
+    # The caller closes on quota/stop; max_queue bounds raw playlist enumeration.
+    def resolve(self, candidate: VideoCandidate, config: ScanConfig, budget: int) -> AsyncIterator[VideoItem]: ...
+    async def close(self) -> None: ...
+
+
+class VideoDownloader(Protocol):
+    # Returns only a real final file. Cancel must reap its process group. Partial files
+    # stay in an explicitly named staging directory, never at the final destination.
+    async def download(self, task: DownloadTask, progress: ProgressSink) -> Path: ...
+    async def close(self) -> None: ...
+
+
+class Repository(Protocol):
+    async def start_session(self, session_id: str, config: ScanConfig) -> None: ...
+    async def finish_session(self, session_id: str, reason: str) -> None: ...
+    async def save_video(self, session_id: str, video: VideoItem) -> None: ...
+    async def save_candidate_error(self, session_id: str, candidate: VideoCandidate, reason: str) -> None: ...
+    async def list_sessions(self) -> list[dict]: ...
+    async def list_videos(self, session_id: str | None = None) -> list[VideoItem]: ...
+    async def save_download(self, task: DownloadTask) -> None: ...
+    async def list_downloads(self) -> list[DownloadTask]: ...
+    async def close(self) -> None: ...

@@ -1,0 +1,40 @@
+flowchart TD
+    A[输入 URL N 目录/保护配置] --> B{校验 HTTP/HTTPS 与正数}
+    B -- 失败 --> ERR[显示纯文本错误 不创建会话]
+    B -- 成功 --> C[独立会话 ID / 优先队列 / 访问集合]
+    C --> D{停止/超时/页面数/任务耗尽?}
+    D -- 否 --> PAUSE{暂停?}
+    PAUSE -- 是 --> WAIT[等待继续或停止 截止时间仍生效]
+    WAIT --> D
+    PAUSE -- 否 --> FETCH[同优先级一批页面 范围与重定向校验 有界获取]
+    FETCH -- 失败 --> RETRY[有限退避重试 / 记录错误]
+    RETRY --> D
+    FETCH -- 成功 --> DISC[发现候选 / 详情 / 明确下一页 / 普通链接]
+    DISC --> NEXT{有候选且未停止?}
+    NEXT -- 是 --> RESOLVE[媒体有界探测 / 惰性解析 仅取下一项]
+    RESOLVE -- 不支持/失败 --> BAD[持久化原因 不计数量]
+    BAD --> NEXT
+    RESOLVE -- 有格式 --> LOCK{原子入口: 会话有效且有额度?}
+    LOCK -- 否 --> STOP[停止派发 取消在途]
+    LOCK -- 是 --> DUP{稳定身份已收录?}
+    DUP -- 是 --> MERGE[合并明确相同视频的格式/来源]
+    MERGE --> NEXT
+    DUP -- 否 --> SAVE[预留额度/插入/SQLite/事件更新 TUI]
+    SAVE --> N{恰好达到 N?}
+    N -- 是 --> STOP
+    N -- 否 --> NEXT
+    NEXT -- 无候选 --> QUEUE[详情优先 分页保留深度 普通链接增加深度]
+    QUEUE --> D
+    NEXT -- 用户停止 --> STOP
+    D -- 是 --> STOP
+    STOP --> REAP[等待所有任务/媒体进程组退出]
+    REAP --> KEEP[结束原因 + 保留结果与历史]
+    KEEP --> CHOICE{用户操作}
+    CHOICE --> EXPORT[详情/复制/纯媒体 TXT/结构化 CSV JSON]
+    CHOICE --> DOWNLOAD[固定目标目录 安全文件名 创建下载任务]
+    DOWNLOAD --> REFRESH[需要时重新解析并校验身份]
+    REFRESH --> STAGE[暂存目录下载/续传 FFmpeg 合并]
+    STAGE -- 取消/失败 --> FAIL[保留明确暂存文件 记录可重试状态]
+    STAGE -- 成功 --> VERIFY{最终非空文件存在?}
+    VERIFY -- 否 --> FAIL
+    VERIFY -- 是 --> PUBLISH[原子无覆盖发布 记录完成]
