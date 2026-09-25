@@ -70,6 +70,8 @@ class UIDownloads:
         self.enqueued = []
         self.cancelled = False
         self.retried = None
+        self.bulk_retried = []
+        self.bulk_errors = {}
 
     async def enqueue(self, items, directory, concurrency=2):
         self.enqueued.append((items, directory, concurrency))
@@ -79,6 +81,16 @@ class UIDownloads:
 
     async def retry(self, task_id):
         self.retried = task_id
+
+    async def retry_all_failed(self):
+        retried = 0
+        for task in self.tasks.values():
+            if task.status == "failed" and task.id not in self.bulk_errors:
+                self.bulk_retried.append(task.id)
+                task.status = "queued"
+                self.on_event(Event("download", download=task))
+                retried += 1
+        return retried, self.bulk_errors
 
     async def cancel(self, task_id=None):
         self.cancelled = True
@@ -208,6 +220,43 @@ async def test_narrow_details_download_target_and_retry(tmp_path):
         app.query_one("#cancel-all", Button).press()
         await pilot.pause()
         assert rt.downloads.cancelled
+
+
+@pytest.mark.asyncio
+async def test_retry_all_failed_ignores_selection_and_reports_partial_result(tmp_path):
+    rt = runtime()
+    app = VideoScoutApp(rt)
+    async with app.run_test(size=(48, 24)) as pilot:
+        tasks = []
+        for number, status in [(1, "completed"), (2, "failed"), (3, "cancelled"), (4, "failed")]:
+            task = DownloadTask.create(sample(number), tmp_path, f"video-{number}")
+            task.status = status
+            rt.downloads.tasks[task.id] = task
+            app._receive_event(Event("download", download=task))
+            tasks.append(task)
+        rt.downloads.bulk_errors = {tasks[3].id: "目录不可写"}
+        app.query_one("#tabs", TabbedContent).active = "downloads-tab"
+        await pilot.pause()
+        table = app.query_one("#download-table", DataTable)
+        table.move_cursor(row=0)  # The selected task is completed, not failed.
+        button = app.query_one("#retry-all-failed", Button)
+        button.scroll_visible(animate=False, immediate=True)
+        await pilot.pause()
+        assert button.region.width > 0
+        assert await pilot.click("#retry-all-failed")
+        await pilot.pause()
+        assert rt.downloads.bulk_retried == [tasks[1].id]
+        assert [task.status for task in tasks] == ["completed", "queued", "cancelled", "failed"]
+        status = str(app.query_one("#status", Static).render())
+        assert "已重新排队 1 个失败下载任务" in status
+        assert "1 个无法重试" in status
+        rt.downloads.bulk_errors.clear()
+        app.query_one("#retry-all-failed", Button).press()
+        await pilot.pause()
+        assert rt.downloads.bulk_retried == [tasks[1].id, tasks[3].id]
+        app.query_one("#retry-all-failed", Button).press()
+        await pilot.pause()
+        assert "当前没有失败的下载任务" in str(app.query_one("#status", Static).render())
 
 
 @pytest.mark.asyncio

@@ -68,6 +68,14 @@ class ControlledFetcher:
         pass
 
 
+class RejectedFetcher:
+    async def fetch(self, task, config):
+        raise ScoutError("HTTP 403（Cloudflare 人机验证阻止了自动扫描）")
+
+    async def close(self):
+        pass
+
+
 class Discovery:
     def extract(self, page, config):
         return [VideoCandidate(url, page.url) for url in page.media_urls]
@@ -107,6 +115,17 @@ def make_scan(items=(), *, blocked=False, events=None, fail=False):
     scanner = ScanService(fetcher, discovery, discovery, resolver, repository,
                           events.append if events is not None else lambda event: None)
     return scanner, fetcher, resolver, repository
+
+
+async def test_initial_page_failure_is_visible_as_session_reason():
+    events = []
+    scan, _, _, repository = make_scan(events=events)
+    scan.fetcher = RejectedFetcher()
+    session_id = await scan.run(ScanConfig("https://example.test/catalog"))
+    assert "Cloudflare 人机验证" in scan.reason
+    assert repository.sessions[session_id]["reason"] == scan.reason
+    assert events[-1].data["reason"] == scan.reason
+    assert not scan.items
 
 
 @pytest.mark.parametrize("limit", [0, -1, 1.5, True, "3"])

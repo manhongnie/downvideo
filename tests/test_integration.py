@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 
+import httpx
 import pytest
 
 from video_scout.adapters.http import HtmlDiscovery, HttpPageFetcher
@@ -116,6 +117,24 @@ async def test_http_retry_access_limits_body_limit_and_redirect_scope(demo_site)
         with pytest.raises(ScoutError, match="上限"):
             await fetcher.fetch(PageTask(site.base_url + "/oversized"),
                                 replace(config, max_body_bytes=1024))
+    finally:
+        await fetcher.close()
+
+
+async def test_cloudflare_challenge_is_reported_without_retrying():
+    requests = []
+
+    def challenge(request):
+        requests.append(request.url)
+        return httpx.Response(403, headers={"cf-mitigated": "challenge"},
+                              content=b"<title>Just a moment...</title>")
+
+    fetcher = HttpPageFetcher(httpx.AsyncClient(transport=httpx.MockTransport(challenge)))
+    url = "https://example.test/catalog"
+    try:
+        with pytest.raises(ScoutError, match="Cloudflare 人机验证"):
+            await fetcher.fetch(PageTask(url), ScanConfig(url, host_interval=0, retries=2))
+        assert len(requests) == 1
     finally:
         await fetcher.close()
 

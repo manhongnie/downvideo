@@ -105,7 +105,7 @@ class VideoScoutApp(App[None]):
     #advanced-grid Input { height: 3; }
     #advanced-grid Label { height: 1; }
     .setting { height: 4; }
-    #browser { height: 3; }
+    #browser, #browser-visible { height: 3; }
     #tabs { height: 23; min-height: 15; }
     #results, #download-table { height: 1fr; min-height: 7; }
     #filter-row { height: 3; }
@@ -130,6 +130,7 @@ class VideoScoutApp(App[None]):
     .compact #input-row Input { width: 1fr; }
     .compact #advanced-grid { grid-size: 1; }
     .compact #video-actions { grid-size: 2; height: 12; }
+    .compact #download-actions { layout: grid; grid-size: 2; height: 6; }
     .compact #tabs { height: 29; }
     .compact #export-row { height: 12; layout: vertical; }
     .compact #export-row > * { width: 1fr; }
@@ -187,6 +188,7 @@ class VideoScoutApp(App[None]):
                             yield Label(label)
                             yield Input(value, id=key)
                 yield Checkbox("可选浏览器增强（需要 Playwright 与 Chromium）", id="browser")
+                yield Checkbox("可见浏览器（桌面弹出 Chromium；需先启用浏览器增强）", id="browser-visible")
             with Horizontal(id="history-row"):
                 yield Select([], prompt="历史扫描会话", id="history")
                 yield Button("载入历史", id="load-history")
@@ -210,6 +212,7 @@ class VideoScoutApp(App[None]):
                     yield DataTable(id="download-table", cursor_type="row", zebra_stripes=True)
                     with Horizontal(id="download-actions"):
                         yield Button("重试当前任务", id="retry-download")
+                        yield Button("重试全部失败", id="retry-all-failed")
                         yield Button("取消当前任务", id="cancel-download")
                         yield Button("取消全部", id="cancel-all")
                 with TabPane("运行日志", id="logs-tab"):
@@ -248,6 +251,10 @@ class VideoScoutApp(App[None]):
         self.query_one("#start-url", Input).focus()
         if getattr(self, "initial_url", ""):
             self.query_one("#start-url", Input).value = self.initial_url
+        if getattr(self, "initial_browser", False):
+            self.query_one("#browser", Checkbox).value = True
+        if getattr(self, "initial_browser_visible", False):
+            self.query_one("#browser-visible", Checkbox).value = True
 
     def on_resize(self) -> None:
         self.set_class(self.size.width < 80, "compact")
@@ -356,6 +363,7 @@ class VideoScoutApp(App[None]):
             request_timeout=float(value("request-timeout")), host_interval=float(value("host-interval")),
             retries=int(value("retries")), max_queue=int(value("max-queue")),
             max_body_bytes=int(value("max-body")), browser=self.query_one("#browser", Checkbox).value,
+            browser_visible=self.query_one("#browser-visible", Checkbox).value,
             browser_steps=int(value("browser-steps")), browser_seconds=float(value("browser-seconds")),
         )
         config.validate()
@@ -521,10 +529,26 @@ class VideoScoutApp(App[None]):
                     raise ScoutError("请先选中一个下载任务")
                 if button_id == "retry-download":
                     await self.runtime.downloads.retry(task_id)
+                    self.set_status("已重新排队当前下载任务。")
                 else:
                     result = self.runtime.downloads.cancel(task_id)
                     if asyncio.iscoroutine(result):
                         await result
+            elif button_id == "retry-all-failed":
+                if self._scan_task and not self._scan_task.done():
+                    raise ScoutError("请先结束或停止扫描，再重试失败下载")
+                retried, errors = await self.runtime.downloads.retry_all_failed()
+                for task_id, error in errors.items():
+                    task = self.runtime.downloads.tasks.get(task_id)
+                    title = task.video.title if task else task_id
+                    self.query_one("#logs", RichLog).write(Text(safe_text(f"重试失败：{title}：{error}")))
+                if retried or errors:
+                    summary = f"已重新排队 {retried} 个失败下载任务"
+                    if errors:
+                        summary += f"；{len(errors)} 个无法重试，详情见运行日志"
+                    self.set_status(summary + "。")
+                else:
+                    self.set_status("当前没有失败的下载任务。")
             elif button_id == "cancel-all":
                 result = self.runtime.downloads.cancel()
                 if asyncio.iscoroutine(result):

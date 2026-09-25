@@ -30,6 +30,7 @@ class ScanConfig:
     max_queue: int = 2000
     max_body_bytes: int = 2_000_000
     browser: bool = False
+    browser_visible: bool = False
     browser_steps: int = 3
     browser_seconds: float = 10
 
@@ -53,6 +54,8 @@ class ScanConfig:
             raise ScoutError("下载目录不能为空")
         if any(not path.startswith("/") for path in self.allowed_paths):
             raise ScoutError("允许路径必须以 / 开头")
+        if self.browser_visible and not self.browser:
+            raise ScoutError("可见浏览器需要先启用浏览器增强")
 
 
 @dataclass(frozen=True)

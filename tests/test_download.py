@@ -11,7 +11,7 @@ import pytest
 from video_scout.adapters.http import HtmlDiscovery, HttpPageFetcher
 from video_scout.adapters.media import HybridVideoResolver, YtDlpDownloader
 from video_scout.adapters.sqlite import SQLiteRepository
-from video_scout.domain.models import MediaVariant, ScanConfig, ScoutError, VideoItem
+from video_scout.domain.models import DownloadTask, MediaVariant, ScanConfig, ScoutError, VideoItem
 from video_scout.services.download import DownloadService, prepare_directory, safe_filename
 from video_scout.services.scan import ScanService
 
@@ -126,6 +126,48 @@ async def test_failed_task_retry_uses_original_destination_and_persists(tmp_path
         assert Path(task.file_path).parent == original.resolve()
         assert adapter.destinations == [str(original.resolve())] * 2
         assert (await repo.list_downloads())[0].status == "completed"
+    finally:
+        await service.close()
+        await repo.close()
+
+
+async def test_retry_all_failed_skips_other_states_and_continues_after_bad_destination(tmp_path):
+    repo = SQLiteRepository(tmp_path / "history.sqlite")
+    good = tmp_path / "good"
+    occupied = tmp_path / "occupied"
+    occupied.write_text("not a directory")
+    tasks = []
+    for number, status, destination in [
+        (1, "failed", good), (2, "failed", occupied),
+        (3, "cancelled", good), (4, "completed", good),
+    ]:
+        video = item(number)
+        task = DownloadTask.create(video, destination, safe_filename(video))
+        task.status = status
+        task.error = "old error"
+        await repo.save_download(task)
+        tasks.append(task)
+    adapter = ControlledDownloader()
+    service = DownloadService(adapter, repo)
+    # A service may already hold newer tasks while older failed tasks remain in SQLite.
+    service.tasks[tasks[3].id] = tasks[3]
+    try:
+        retried, errors = await service.retry_all_failed()
+        assert retried == 1
+        assert set(errors) == {tasks[1].id}
+        assert "下载目录不可写" in errors[tasks[1].id]
+        await service.wait()
+        assert adapter.attempts == 1
+        assert adapter.destinations == [str(good)]
+        assert service.tasks[tasks[0].id].id == tasks[0].id
+        assert service.tasks[tasks[0].id].filename == tasks[0].filename
+        assert [service.tasks[task.id].status for task in tasks] == [
+            "completed", "failed", "cancelled", "completed",
+        ]
+        persisted = {task.id: task for task in await repo.list_downloads()}
+        assert [persisted[task.id].status for task in tasks] == [
+            "completed", "failed", "cancelled", "completed",
+        ]
     finally:
         await service.close()
         await repo.close()

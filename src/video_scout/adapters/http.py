@@ -1,6 +1,7 @@
 """HTTP navigation and conservative, bounded HTML discovery."""
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import binascii
@@ -8,6 +9,7 @@ import heapq
 import json
 import re
 import time
+from itertools import islice
 from urllib.parse import unquote, urljoin, urlsplit
 
 import httpx
@@ -61,6 +63,8 @@ class HttpPageFetcher:
                         attempts += 1
                     else:
                         if response.status_code >= 400:
+                            if response.status_code == 403 and response.headers.get("cf-mitigated", "").lower() == "challenge":
+                                raise ScoutError("HTTP 403（Cloudflare 人机验证阻止了自动扫描）")
                             raise ScoutError(f"HTTP {response.status_code}（访问受限不无限重试）")
                         content_type = response.headers.get("content-type", "").split(";")[0].lower()
                         if any(content_type.startswith(mime) for mime in MEDIA_TYPES):
@@ -105,6 +109,48 @@ def _looks_media(url: str) -> bool:
 
 
 _MACCMS_PLAYER = re.compile(r"\bplayer_aaaa\s*=\s*")
+_PACKED_PLAYER = re.compile(
+    r"eval\(function\(p,a,c,k,e,d\).*?\}\(\s*"
+    r"(?P<packed>'(?:\\.|[^'\\])*')\s*,\s*(?P<base>\d+)\s*,\s*(?P<count>\d+)\s*,\s*"
+    r"(?P<words>'(?:\\.|[^'\\])*')\.split\('\|'\)",
+    re.DOTALL,
+)
+_MISSAV_SOURCE = re.compile(r"\bsource\s*=\s*(['\"])(https?://[^'\"\s]+)\1")
+
+
+def _missav_player_urls(soup: BeautifulSoup):
+    """Read the main player's packed HLS source without executing page JavaScript."""
+    if soup.select_one("video.player") is None:
+        return
+    for script in soup.find_all("script", limit=64):
+        body = script.string or ""
+        if len(body) > 100_000 or "eval(function(p,a,c,k,e,d)" not in body:
+            continue
+        for match in islice(_PACKED_PLAYER.finditer(body), 4):
+            try:
+                base, count = int(match["base"]), int(match["count"])
+                if (not 2 <= base <= 36 or not 0 < count <= 200
+                        or len(match["packed"]) > 8192 or len(match["words"]) > 8192):
+                    continue
+                packed = ast.literal_eval(match["packed"])
+                words = ast.literal_eval(match["words"]).split("|")
+                if (not isinstance(packed, str) or len(packed) > 8192
+                        or len(words) != count or any(len(word) > 128 for word in words)):
+                    continue
+
+                def replace(token: re.Match[str]) -> str:
+                    try:
+                        index = int(token.group(), base)
+                    except ValueError:
+                        return token.group()
+                    return words[index] if index < len(words) and words[index] else token.group()
+
+                unpacked = re.sub(r"\b[0-9a-z]+\b", replace, packed)
+                source = _MISSAV_SOURCE.search(unpacked)
+                if source and len(source[2]) <= 8192 and _looks_media(source[2]):
+                    yield validate_url(source[2])
+            except (SyntaxError, ValueError, TypeError, ScoutError):
+                continue
 
 
 def _maccms_media_urls(soup: BeautifulSoup):
@@ -146,6 +192,9 @@ class HtmlDiscovery:
             return [VideoCandidate(page.url, page.url)]
         soup = BeautifulSoup(page.body, "html.parser")
         title = safe_text(soup.title.get_text(" ", strip=True), 500) if soup.title else ""
+        missav_page = urlsplit(page.url).hostname == "missav.ws"
+        if missav_page and soup.select_one("video.player") and soup.find("h1"):
+            title = safe_text(soup.find("h1").get_text(" ", strip=True), 500) or title
         candidates: list[VideoCandidate] = []
         seen: set[str] = set()
 
@@ -155,9 +204,11 @@ class HtmlDiscovery:
                 candidates.append(VideoCandidate(url, page.url, label or title, kind, group))
 
         for video in soup.find_all("video"):
+            if "preview" in video.get("class", []):
+                continue
             sources = [_url(page.url, video.get("src"))]
             sources.extend(_url(page.url, source.get("src")) for source in video.find_all("source"))
-            urls = tuple(dict.fromkeys(source for source in sources if source))
+            urls = tuple(dict.fromkeys(source for source in sources if source and not source.startswith("blob:")))
             if urls:
                 add(urls[0], group=urls, label=safe_text(video.get("title", ""), 500))
                 seen.update(urls)
@@ -180,14 +231,20 @@ class HtmlDiscovery:
                     add(url, "media" if _looks_media(url) else "embed")
         for url in _maccms_media_urls(soup):
             add(url)
-        for url in page.media_urls:
-            add(_url(page.url, url))
+        if missav_page:
+            for url in _missav_player_urls(soup):
+                add(url)
+        else:
+            for url in page.media_urls:
+                add(_url(page.url, url))
         # Let yt-dlp's site extractor handle a visited play page when HTML offers no media.
         # Resolve only pages with play/embed hints, avoiding yt-dlp on every list page.
         path = urlsplit(page.url).path.lower()
-        if not candidates and (self.supports_site(page.url) or any(hint in path for hint in ("/watch", "/video", "/play", "/embed", "/playlist"))
-                               or soup.find("video") is not None):
-            add(page.url, "page")
+        if not candidates and not missav_page:
+            if (self.supports_site(page.url)
+                    or any(hint in path for hint in ("/watch", "/video", "/play", "/embed", "/playlist"))
+                    or soup.find("video") is not None):
+                add(page.url, "page")
         return candidates
 
     def discover(self, page: FetchedPage, task: PageTask, config: ScanConfig) -> list[PageTask]:
@@ -211,6 +268,7 @@ class HtmlDiscovery:
             pagination = "next" in rel or text in {"next", "next page", "下一页", "下页", "›", "»"}
             pagination = pagination or "pagination" in classes or "pagination" in parent_classes
             detail = tag.name == "iframe" or any(hint in classes for hint in ("video", "detail", "play"))
+            detail = detail or (tag.name == "a" and tag.find("video", class_="preview") is not None)
             detail = detail or any(hint in urlsplit(url).path.lower() for hint in ("/watch", "/video/", "/detail/", "/play/"))
             kind = "pagination" if pagination else "detail" if detail else "page"
             depth = task.depth if pagination else task.depth + 1

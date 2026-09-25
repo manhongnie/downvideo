@@ -282,7 +282,10 @@ class ScanService:
                         except _PersistenceFailure:
                             raise
                         except Exception as exc:
-                            self._emit("log", f"页面失败：{type(exc).__name__}: {exc}")
+                            detail = str(exc) if isinstance(exc, ScoutError) else f"{type(exc).__name__}: {exc}"
+                            self._emit("log", f"页面失败：{detail}")
+                            if task.url == config.start_url and not ctx.items:
+                                ctx.reason = redact(f"起始网页访问失败：{detail}")
                         finally:
                             ctx.pending.discard(future)
                         if ctx.stop.is_set():

@@ -158,6 +158,28 @@ class DownloadService:
         self._emit(task)
         self._schedule(task)
 
+    async def retry_all_failed(self) -> tuple[int, dict[str, str]]:
+        """Queue every failed task, leaving cancelled and completed tasks untouched.
+
+        A bad destination for one task must not prevent the others from retrying.
+        The returned errors are keyed by task ID so the UI can report each failure.
+        """
+        if not self.can_download() or self._closing:
+            raise ScoutError("扫描或退出期间不能重试下载")
+        for task in await self.repository.list_downloads():
+            self.tasks.setdefault(task.id, task)
+        failed_ids = [task.id for task in self.tasks.values() if task.status == "failed"]
+        retried = 0
+        errors: dict[str, str] = {}
+        for task_id in failed_ids:
+            try:
+                await self.retry(task_id)
+            except Exception as exc:
+                errors[task_id] = redact(f"{type(exc).__name__}: {exc}")
+            else:
+                retried += 1
+        return retried, errors
+
     async def close(self) -> None:
         self._closing = True
         self.cancel()
