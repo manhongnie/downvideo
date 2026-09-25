@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import heapq
+import json
+import re
 import time
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
@@ -17,9 +21,9 @@ MEDIA_TYPES = ("video/", "application/vnd.apple.mpegurl", "application/x-mpegurl
 
 
 class HttpPageFetcher:
-    def __init__(self, client: httpx.AsyncClient | None = None):
+    def __init__(self, client: httpx.AsyncClient | None = None, *, proxy: str | None = None):
         self.client = client or httpx.AsyncClient(follow_redirects=False, trust_env=False,
-                                                headers={"User-Agent": "video-scout/0.1"})
+                                                proxy=proxy, headers={"User-Agent": "video-scout/0.1"})
         self._locks: dict[str, asyncio.Lock] = {}
         self._last: dict[str, float] = {}
 
@@ -100,6 +104,37 @@ def _looks_media(url: str) -> bool:
     return urlsplit(url).path.lower().endswith(MEDIA_EXTENSIONS)
 
 
+_MACCMS_PLAYER = re.compile(r"\bplayer_aaaa\s*=\s*")
+
+
+def _maccms_media_urls(soup: BeautifulSoup):
+    """Read MacCMS's JSON player hint without executing page scripts."""
+    for script in soup.find_all("script"):
+        body = script.string or ""
+        match = _MACCMS_PLAYER.search(body)
+        if not match:
+            continue
+        try:
+            player, _ = json.JSONDecoder().raw_decode(body[match.end():])
+            if not isinstance(player, dict):
+                continue
+            value = player.get("url")
+            if not isinstance(value, str) or not value or len(value) > 8192:
+                continue
+            encryption = str(player.get("encrypt", 0))
+            if encryption == "2":
+                value = base64.b64decode(value, validate=True).decode("utf-8")
+            if encryption in {"1", "2"}:
+                value = unquote(value)
+            elif encryption != "0":
+                continue
+            if len(value) > 8192:
+                continue
+            yield validate_url(value)
+        except (ValueError, TypeError, UnicodeError, binascii.Error, ScoutError):
+            continue
+
+
 class HtmlDiscovery:
     """Two narrow ports share one HTML adapter; neither performs network requests."""
 
@@ -143,6 +178,8 @@ class HtmlDiscovery:
                 # External embedded players are webpage navigation, not CDN media.
                 if url and (_looks_media(url) or in_scope(url, config)):
                     add(url, "media" if _looks_media(url) else "embed")
+        for url in _maccms_media_urls(soup):
+            add(url)
         for url in page.media_urls:
             add(_url(page.url, url))
         # Let yt-dlp's site extractor handle a visited play page when HTML offers no media.

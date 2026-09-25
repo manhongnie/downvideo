@@ -35,14 +35,14 @@ async def test_input_scan_select_download_real_file_with_textual(demo_site, tmp_
         table = app.query_one("#results", DataTable)
         table.move_cursor(row=1)
         toggle = app.query_one("#toggle", Button)
-        toggle.scroll_visible(immediate=True)
+        toggle.scroll_visible(animate=False, immediate=True)
         await pilot.pause()
         assert await pilot.click("#toggle")
         await pilot.pause()
         assert len(app.selected_ids) == 1
         chosen_id = next(iter(app.selected_ids))
         download = app.query_one("#download", Button)
-        download.scroll_visible(immediate=True)
+        download.scroll_visible(animate=False, immediate=True)
         await pilot.pause()
         assert await pilot.click("#download")
         async with asyncio.timeout(30):

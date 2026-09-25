@@ -178,7 +178,7 @@ async def test_narrow_details_download_target_and_retry(tmp_path):
     async with app.run_test(size=(48, 24)) as pilot:
         await pilot.pause()
         button = app.query_one("#show-details", Button)
-        button.scroll_visible(immediate=True)
+        button.scroll_visible(animate=False, immediate=True)
         await pilot.pause()
         assert button.region.width > 0
         assert await pilot.click("#show-details")

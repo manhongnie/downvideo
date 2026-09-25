@@ -29,7 +29,7 @@ class QuietLogger:
 
 
 def options(request: dict) -> dict:
-    return {
+    opts = {
         "quiet": True, "no_warnings": True, "noprogress": True,
         "logger": QuietLogger(), "cachedir": False, "cookiefile": None,
         "cookiesfrombrowser": None, "socket_timeout": request.get("timeout", 20),
@@ -40,6 +40,9 @@ def options(request: dict) -> dict:
         "overwrites": False, "continuedl": True, "nopart": False,
         "concurrent_fragment_downloads": 1,
     }
+    if request.get("proxy"):
+        opts["proxy"] = request["proxy"]
+    return opts
 
 
 def safe_youtube_dl(opts: dict, contexts: dict | None = None, body_limit: int | None = None):

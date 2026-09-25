@@ -158,7 +158,7 @@ class VideoScoutApp(App[None]):
         with VerticalScroll(id="workspace"):
             yield Label("起始网页 / 下载目录 / 已确认视频上限 N（默认 100）")
             with Horizontal(id="input-row"):
-                yield Input(placeholder="https://example.com/", id="start-url")
+                yield Input(placeholder="网址 Ctrl+Shift+V 粘贴", id="start-url")
                 yield Input("downloads", placeholder="下载目录", id="directory")
                 yield Input("100", placeholder="N", id="limit", type="integer")
             with Horizontal(id="scan-actions"):

@@ -21,6 +21,15 @@ def validate_url(url: str) -> str:
     return url
 
 
+def validate_proxy_url(url: str) -> str:
+    """Accept an explicit HTTP(S) proxy endpoint without URL credentials or data."""
+    validate_url(url)
+    parts = urlsplit(url)
+    if parts.path not in {"", "/"} or parts.query or parts.fragment:
+        raise ScoutError("代理地址只能包含协议、主机和端口")
+    return url
+
+
 def normalize_url(url: str) -> str:
     validate_url(url)
     parts = urlsplit(url)

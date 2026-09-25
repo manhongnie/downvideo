@@ -140,8 +140,9 @@ def _item_from_info(info: dict, candidate: VideoCandidate) -> VideoItem:
 class HybridVideoResolver:
     """HTTP confirms direct media; yt-dlp handles manifests and supported sites."""
 
-    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
-        self.client = client or httpx.AsyncClient(follow_redirects=False, trust_env=False)
+    def __init__(self, client: httpx.AsyncClient | None = None, *, proxy: str | None = None) -> None:
+        self.client = client or httpx.AsyncClient(follow_redirects=False, trust_env=False, proxy=proxy)
+        self.proxy = proxy
         self._owns_client = client is None
         self._workers: set[_Worker] = set()
         self._host_locks: dict[str, asyncio.Lock] = {}
@@ -270,6 +271,7 @@ class HybridVideoResolver:
                                 "timeout": config.request_timeout, "retries": config.retries,
                                 "max_entries": config.max_queue, "host_interval": config.host_interval,
                                 "max_body_bytes": config.max_body_bytes,
+                                "proxy": self.proxy,
                                 "contexts": {urlsplit(candidate.url).hostname: context}})
             # Every pull is permission from ScanService. Duplicate records consume no
             # global quota, so the initial remaining quota cannot cap raw records.
@@ -293,8 +295,9 @@ class HybridVideoResolver:
 class YtDlpDownloader:
     """Keep incomplete files in .video-scout-partials; publish without overwriting."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, proxy: str | None = None) -> None:
         self._workers: set[_Worker] = set()
+        self.proxy = proxy
 
     async def download(self, task: DownloadTask, progress: ProgressSink) -> Path:
         directory = Path(task.target_dir).expanduser().resolve()
@@ -310,7 +313,7 @@ class YtDlpDownloader:
         try:
             progress("downloading", None)
             await worker.start({"mode": "download", "video": video_dict(task.video, include_context=True),
-                                "staging": str(staging), "filename": task.filename})
+                                "staging": str(staging), "filename": task.filename, "proxy": self.proxy})
             while True:
                 message = await worker.receive()
                 if message["type"] == "progress":

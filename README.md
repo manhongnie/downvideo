@@ -31,6 +31,16 @@ python -m pip install --no-deps -e .
 video-scout
 ```
 
+使用 conda 时：
+
+```bash
+conda create -y -n downvideo -c conda-forge --override-channels python=3.12 ffmpeg pip
+conda activate downvideo
+python -m pip install -r requirements.lock
+python -m pip install --no-deps -e .
+video-scout
+```
+
 `uv.lock` 包含解析后的精确版本；基础依赖为 Textual、HTTPX、Beautiful Soup 和 yt-dlp。FFmpeg 为系统依赖，分离的音视频轨道需要它合并。使用实际容器扩展名，不强制伪装成 MP4。
 
 可选浏览器增强：
@@ -43,9 +53,15 @@ uv run playwright install chromium
 
 在高级设置勾选浏览器增强。未安装 Playwright 或 Chromium 会显示明确提示并继续 HTTP 基础扫描。普通 HTML 分页无需浏览器。
 
+若所在网络需要 HTTP 代理，启动时显式传入代理地址：
+
+```bash
+video-scout --proxy 'http://127.0.0.1:10808' --url 'https://example.com/'
+```
+
 ## 使用
 
-1. 上方填 HTTP/HTTPS 起始网址、下载目录、正整数 N。高级设置可改深度、页数、时间、并发、允许主机/路径、限速、重试、队列和响应大小。
+1. 上方填 HTTP/HTTPS 起始网址、下载目录、正整数 N。Linux 终端通常用 Ctrl+Shift+V 或右键粘贴外部网址；Ctrl+V 是 Textual 的应用内粘贴。也可通过 `--url` 在启动时预填。高级设置可改深度、页数、时间、并发、允许主机/路径、限速、重试、队列和响应大小。
 2. 点击「扫描」或 F5。列表只计已解析确认的唯一视频，疑似页、失败候选和分片不计入 N。日志显示失败原因。
 3. F6 暂停/继续派发，F7 停止。暂停期间已发出的请求可能收尾；停止会先显示「停止派发」，清理完成后显示「所有在途任务已退出」。30 分钟截止时间包含暂停时间。
 4. 在视频结果表回车或「勾选/取消」。筛选与标题排序不会改变勾选对象；「全选当前」只增加当前可见结果，「取消选择」清空全部选择。

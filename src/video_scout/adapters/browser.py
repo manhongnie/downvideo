@@ -11,9 +11,11 @@ from video_scout.domain.urls import in_scope, validate_url
 
 class OptionalBrowserFetcher:
     def __init__(self, base: PageFetcher,
-                 warning: Callable[[str], None] | None = None) -> None:
+                 warning: Callable[[str], None] | None = None,
+                 proxy: str | None = None) -> None:
         self.base = base
         self.warning = warning or (lambda _message: None)
+        self.proxy = proxy
         self._playwright = None
         self._browser = None
         self._unavailable = False
@@ -28,7 +30,10 @@ class OptionalBrowserFetcher:
             try:
                 from playwright.async_api import async_playwright
                 self._playwright = await async_playwright().start()
-                self._browser = await self._playwright.chromium.launch(headless=True)
+                launch = {"headless": True}
+                if self.proxy:
+                    launch["proxy"] = {"server": self.proxy}
+                self._browser = await self._playwright.chromium.launch(**launch)
                 return True
             except Exception as exc:
                 # Import/launch errors include a missing installed Chromium binary.
